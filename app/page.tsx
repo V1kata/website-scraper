@@ -1,12 +1,15 @@
 'use client';
 
-import { useState } from 'react';
-import { Loader2, Link as LinkIcon, Search, AlertCircle, Hash } from 'lucide-react';
+import { useState, useEffect, Suspense } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { Loader2, Link as LinkIcon, Search, AlertCircle, Hash, User, ChevronDown, ChevronUp } from 'lucide-react';
 
 interface LinkData {
   title: string;
   description: string;
   tags: string[];
+  authorName?: string;
+  transcript?: string;
   platform: 'youtube' | 'tiktok';
   originalUrl: string;
 }
@@ -18,6 +21,8 @@ function getEmbedUrl(url: string, platform: string) {
       let videoId = '';
       if (urlObj.hostname.includes('youtu.be')) {
         videoId = urlObj.pathname.slice(1);
+      } else if (urlObj.pathname.startsWith('/shorts/')) {
+        videoId = urlObj.pathname.split('/')[2] || '';
       } else {
         videoId = urlObj.searchParams.get('v') || '';
       }
@@ -33,19 +38,42 @@ function getEmbedUrl(url: string, platform: string) {
   return url;
 }
 
-export default function Home() {
+function HomeContent() {
+  const searchParams = useSearchParams();
   const [url, setUrl] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [data, setData] = useState<LinkData | null>(null);
+  const [isTranscriptExpanded, setIsTranscriptExpanded] = useState(false);
 
-  const handleProcess = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!url) return;
+  useEffect(() => {
+    // Check if we came from a Web Share Target
+    const sharedUrl = searchParams.get('url');
+    const sharedText = searchParams.get('text');
+    
+    // Sometimes the link is in the text field instead of the URL field
+    let linkToProcess = sharedUrl;
+    if (!linkToProcess && sharedText) {
+      const urlRegex = /(https?:\/\/[^\s]+)/g;
+      const match = sharedText.match(urlRegex);
+      if (match) {
+        linkToProcess = match[0];
+      }
+    }
+
+    if (linkToProcess) {
+      setUrl(linkToProcess);
+      processLink(linkToProcess);
+    }
+  }, [searchParams]);
+
+  const processLink = async (linkToFetch: string) => {
+    if (!linkToFetch) return;
 
     setLoading(true);
     setError('');
     setData(null);
+    setIsTranscriptExpanded(false);
 
     try {
       const res = await fetch('/api/extract', {
@@ -53,7 +81,7 @@ export default function Home() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ url }),
+        body: JSON.stringify({ url: linkToFetch }),
       });
 
       const json = await res.json();
@@ -68,6 +96,11 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleProcess = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await processLink(url);
   };
 
   return (
@@ -154,9 +187,17 @@ export default function Home() {
               {/* Metadata Content */}
               <div className="p-8">
                 <div className="flex items-start justify-between gap-4 mb-4">
-                  <h2 className="text-2xl font-bold text-white leading-tight">
-                    {data.title}
-                  </h2>
+                  <div>
+                    <h2 className="text-2xl font-bold text-white leading-tight mb-2">
+                      {data.title}
+                    </h2>
+                    {data.authorName && (
+                      <div className="flex items-center gap-1.5 text-purple-400 text-sm font-semibold">
+                        <User className="w-4 h-4" />
+                        <span>{data.authorName}</span>
+                      </div>
+                    )}
+                  </div>
                   <div className={`px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-widest flex-shrink-0 shadow-inner ${
                     data.platform === 'youtube' 
                       ? 'bg-red-500/10 text-red-400 border border-red-500/20 shadow-red-500/10' 
@@ -166,9 +207,39 @@ export default function Home() {
                   </div>
                 </div>
 
-                <p className="text-neutral-400 line-clamp-3 mb-8 leading-relaxed font-medium">
-                  {data.description}
-                </p>
+                <div className="mb-8 space-y-4">
+                  <div className="text-neutral-400 leading-relaxed font-medium line-clamp-3">
+                    {data.description}
+                  </div>
+                  
+                  {data.transcript ? (
+                    <button 
+                      onClick={() => setIsTranscriptExpanded(!isTranscriptExpanded)}
+                      className="flex items-center gap-1.5 text-sm font-semibold text-green-400 hover:text-green-300 transition-colors"
+                    >
+                      {isTranscriptExpanded ? (
+                        <><ChevronUp className="w-4 h-4" /> Hide Transcript</>
+                      ) : (
+                        <><ChevronDown className="w-4 h-4" /> Show Transcript</>
+                      )}
+                    </button>
+                  ) : (
+                    <button 
+                      disabled
+                      className="flex items-center gap-1.5 text-sm font-semibold text-neutral-500 cursor-not-allowed"
+                    >
+                      <span>Transcript not available</span>
+                    </button>
+                  )}
+
+                  {isTranscriptExpanded && data.transcript && (
+                    <div className="mt-4 p-4 bg-neutral-800/50 border border-green-500/20 rounded-lg">
+                      <p className="text-neutral-300 leading-relaxed text-sm">
+                        {data.transcript}
+                      </p>
+                    </div>
+                  )}
+                </div>
 
                 {data.tags && data.tags.length > 0 && (
                   <div className="space-y-4 pt-6 border-t border-white/5">
@@ -199,5 +270,17 @@ export default function Home() {
         )}
       </div>
     </main>
+  );
+}
+
+export default function Home() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-neutral-950 flex items-center justify-center">
+        <Loader2 className="w-8 h-8 animate-spin text-purple-500" />
+      </div>
+    }>
+      <HomeContent />
+    </Suspense>
   );
 }

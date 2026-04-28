@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import * as cheerio from 'cheerio';
+import { YoutubeTranscript } from 'youtube-transcript';
 
 export async function POST(req: Request) {
   try {
@@ -26,6 +27,8 @@ export async function POST(req: Request) {
     let title = '';
     let description = '';
     let tags: string[] = [];
+    let transcript = '';
+    let html = '';
 
     // Attempt to fetch standard oEmbed for fallback if HTML parsing fails
     let authorName = '';
@@ -39,7 +42,7 @@ export async function POST(req: Request) {
     });
 
     if (response.ok) {
-      const html = await response.text();
+      html = await response.text();
       const $ = cheerio.load(html);
 
       title = $('meta[property="og:title"]').attr('content') || $('title').text() || '';
@@ -58,24 +61,22 @@ export async function POST(req: Request) {
       }
     }
 
-    // Fallback to oEmbed if cheerio failed to get title (e.g. anti-bot)
-    if (!title) {
-      if (isYouTube) {
-        const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`;
-        const oembedRes = await fetch(oembedUrl);
-        if (oembedRes.ok) {
-          const oembedData = await oembedRes.json();
-          title = oembedData.title || '';
-          authorName = oembedData.author_name || '';
-        }
-      } else if (isTikTok) {
-        const oembedUrl = `https://www.tiktok.com/oembed?url=${encodeURIComponent(url)}`;
-        const oembedRes = await fetch(oembedUrl);
-        if (oembedRes.ok) {
-          const oembedData = await oembedRes.json();
-          title = oembedData.title || '';
-          authorName = oembedData.author_name || '';
-        }
+    // Always fetch oEmbed to get authorName, and fallback for title
+    if (isYouTube) {
+      const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`;
+      const oembedRes = await fetch(oembedUrl);
+      if (oembedRes.ok) {
+        const oembedData = await oembedRes.json();
+        if (!title) title = oembedData.title || '';
+        authorName = oembedData.author_name || '';
+      }
+    } else if (isTikTok) {
+      const oembedUrl = `https://www.tiktok.com/oembed?url=${encodeURIComponent(url)}`;
+      const oembedRes = await fetch(oembedUrl);
+      if (oembedRes.ok) {
+        const oembedData = await oembedRes.json();
+        if (!title) title = oembedData.title || '';
+        authorName = oembedData.author_name || '';
       }
     }
 
@@ -84,10 +85,50 @@ export async function POST(req: Request) {
       title = title.replace(' on TikTok', '');
     }
 
+    // Extract Transcript
+    if (isYouTube) {
+      try {
+        // Handle YouTube Shorts URLs by extracting video ID and converting to standard format
+        let transcriptUrl = url;
+        if (parsedUrl.pathname.startsWith('/shorts/')) {
+          const videoId = parsedUrl.pathname.split('/')[2];
+          if (videoId) {
+            transcriptUrl = `https://www.youtube.com/watch?v=${videoId}`;
+          }
+        }
+        
+        const transcriptData = await YoutubeTranscript.fetchTranscript(transcriptUrl);
+        if (transcriptData && transcriptData.length > 0) {
+          transcript = transcriptData.map(item => item.text).join(' ');
+        }
+      } catch (err) {
+        console.log('No transcript available or fetching failed for YouTube:', err);
+      }
+    } else if (isTikTok && html) {
+      // Attempt to extract TikTok closed captions from the hydration data
+      try {
+        const match = html.match(/__UNIVERSAL_DATA_FOR_REHYDRATION__.*?>(.*?)</);
+        if (match && match[1]) {
+          const data = JSON.parse(match[1]);
+          // This is a naive attempt to find subtitles within the deeply nested TikTok JSON
+          const jsonStr = JSON.stringify(data);
+          const subtitleMatches = jsonStr.match(/"subtitles":\[(.*?)\]/);
+          if (subtitleMatches) {
+             // Subtitles exist, but we might not easily parse them without knowing the exact current schema
+             transcript = 'Auto-captions exist but cannot be fully extracted at this time.';
+          }
+        }
+      } catch (e) {
+        console.log('Failed to parse TikTok transcript data');
+      }
+    }
+
     return NextResponse.json({
       title: title || 'Unknown Title',
-      description: description || authorName || 'No description available',
+      description: description || 'No description available',
       tags,
+      authorName,
+      transcript,
       platform: isYouTube ? 'youtube' : 'tiktok',
       originalUrl: url
     });

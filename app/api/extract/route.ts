@@ -33,51 +33,59 @@ export async function POST(req: Request) {
     // Attempt to fetch standard oEmbed for fallback if HTML parsing fails
     let authorName = '';
 
-    const response = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-      },
-    });
+    try {
+      const response = await fetch(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.5',
+        },
+      });
 
-    if (response.ok) {
-      html = await response.text();
-      const $ = cheerio.load(html);
+      if (response.ok) {
+        html = await response.text();
+        const $ = cheerio.load(html);
 
-      title = $('meta[property="og:title"]').attr('content') || $('title').text() || '';
-      description = $('meta[property="og:description"]').attr('content') || $('meta[name="description"]').attr('content') || '';
-      
-      if (isYouTube) {
-        const keywords = $('meta[name="keywords"]').attr('content');
-        if (keywords) {
-          tags = keywords.split(',').map(tag => tag.trim()).filter(Boolean);
-        }
-      } else if (isTikTok) {
-        const hashtags = description.match(/#[\w]+/g);
-        if (hashtags) {
-          tags = hashtags.map(tag => tag.trim());
+        title = $('meta[property="og:title"]').attr('content') || $('title').text() || '';
+        description = $('meta[property="og:description"]').attr('content') || $('meta[name="description"]').attr('content') || '';
+        
+        if (isYouTube) {
+          const keywords = $('meta[name="keywords"]').attr('content');
+          if (keywords) {
+            tags = keywords.split(',').map(tag => tag.trim()).filter(Boolean);
+          }
+        } else if (isTikTok) {
+          const hashtags = description.match(/#[\w]+/g);
+          if (hashtags) {
+            tags = hashtags.map(tag => tag.trim());
+          }
         }
       }
+    } catch (fetchError) {
+      console.log('Failed to fetch HTML directly, falling back to oEmbed:', fetchError);
     }
 
     // Always fetch oEmbed to get authorName, and fallback for title
-    if (isYouTube) {
-      const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`;
-      const oembedRes = await fetch(oembedUrl);
-      if (oembedRes.ok) {
-        const oembedData = await oembedRes.json();
-        if (!title) title = oembedData.title || '';
-        authorName = oembedData.author_name || '';
+    try {
+      if (isYouTube) {
+        const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`;
+        const oembedRes = await fetch(oembedUrl);
+        if (oembedRes.ok) {
+          const oembedData = await oembedRes.json();
+          if (!title) title = oembedData.title || '';
+          authorName = oembedData.author_name || '';
+        }
+      } else if (isTikTok) {
+        const oembedUrl = `https://www.tiktok.com/oembed?url=${encodeURIComponent(url)}`;
+        const oembedRes = await fetch(oembedUrl);
+        if (oembedRes.ok) {
+          const oembedData = await oembedRes.json();
+          if (!title) title = oembedData.title || '';
+          authorName = oembedData.author_name || '';
+        }
       }
-    } else if (isTikTok) {
-      const oembedUrl = `https://www.tiktok.com/oembed?url=${encodeURIComponent(url)}`;
-      const oembedRes = await fetch(oembedUrl);
-      if (oembedRes.ok) {
-        const oembedData = await oembedRes.json();
-        if (!title) title = oembedData.title || '';
-        authorName = oembedData.author_name || '';
-      }
+    } catch (oembedError) {
+      console.log('Failed to fetch oEmbed data:', oembedError);
     }
 
     // Clean up title
